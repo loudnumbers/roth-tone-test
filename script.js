@@ -1,6 +1,7 @@
 // This file contains the JavaScript code that utilizes the Tone.js library to create and manipulate audio.
 
 let synth = null; // Declare synth globally to stop playback
+let filter = null; // Declare filter globally for dynamic cutoff adjustment
 
 document.addEventListener('DOMContentLoaded', () => {
     // Default data
@@ -82,6 +83,7 @@ document.addEventListener('DOMContentLoaded', () => {
     playbackDiv.appendChild(tempLabel);
 
     const tempSelect = document.createElement('select');
+    tempSelect.name = "temp";
     ["min", "max"].forEach(option => {
         const opt = document.createElement('option');
         opt.value = option;
@@ -96,6 +98,7 @@ document.addEventListener('DOMContentLoaded', () => {
     playbackDiv.appendChild(seasonLabel);
 
     const seasonSelect = document.createElement('select');
+    seasonSelect.name = "season";
     ["year", "spring", "summer", "autumn", "winter"].forEach(option => {
         const opt = document.createElement('option');
         opt.value = option;
@@ -110,6 +113,7 @@ document.addEventListener('DOMContentLoaded', () => {
     playbackDiv.appendChild(sspLabel);
 
     const sspSelect = document.createElement('select');
+    sspSelect.name = "ssp";
     ["245", "585"].forEach(option => {
         const opt = document.createElement('option');
         opt.value = option;
@@ -135,6 +139,30 @@ document.addEventListener('DOMContentLoaded', () => {
         processData(data, chosen);
     });
 
+    // Add a slider for filter cutoff
+    const filterLabel = document.createElement('label');
+    filterLabel.innerText = "Low-pass Filter Cutoff: ";
+    playbackDiv.appendChild(filterLabel);
+
+    const filterSlider = document.createElement('input');
+    filterSlider.type = 'range';
+    filterSlider.min = '100';
+    filterSlider.max = '10000';
+    filterSlider.value = '1000'; // Default cutoff frequency
+    filterSlider.step = '100';
+    playbackDiv.appendChild(filterSlider);
+
+    const filterValue = document.createElement('span');
+    filterValue.innerText = `${filterSlider.value} Hz`;
+    playbackDiv.appendChild(filterValue);
+
+    filterSlider.addEventListener('input', () => {
+        filterValue.innerText = `${Math.round(filterSlider.value)} Hz`; // Display the rounded cutoff frequency
+        if (filter) {
+            filter.frequency.value = filterSlider.value; // Dynamically adjust the filter cutoff
+        }
+    });
+
     // Add "Play Data" button
     const playDataButton = document.createElement('button');
     playDataButton.innerText = "Play Data";
@@ -142,9 +170,9 @@ document.addEventListener('DOMContentLoaded', () => {
     playbackDiv.appendChild(playDataButton);
 
     playDataButton.addEventListener('click', async () => {
-        const temp = tempSelect.value;
-        const season = seasonSelect.value;
-        const ssp = sspSelect.value;
+        const temp = document.querySelector('select[name="temp"]').value;
+        const season = document.querySelector('select[name="season"]').value;
+        const ssp = document.querySelector('select[name="ssp"]').value;
         chosen = `${temp}${season}${ssp}`;
         console.log("Chosen combination:", chosen);
 
@@ -154,7 +182,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const { ndata, yearaverage } = result;
 
             // Play normalized data
-            await playNormalizedData(ndata, yearaverage);
+            await playNormalizedData(ndata, yearaverage, filterSlider.value);
         }
     });
 
@@ -206,32 +234,51 @@ function processData(data, chosen) {
 }
 
 // Play normalized data function
-async function playNormalizedData(ndata, yearaverage) {
+async function playNormalizedData(ndata, yearaverage, cutoff) {
     if (synth) {
         synth.dispose(); // Dispose of any existing synth to avoid conflicts
     }
+    if (filter) {
+        filter.dispose(); // Dispose of any existing filter
+    }
 
-    synth = new Tone.Synth().toDestination(); // Create a new synth
+    // Create a low-pass filter
+    filter = new Tone.Filter({
+        type: "lowpass",
+        frequency: cutoff, // Set initial cutoff frequency
+        rolloff: -12,
+        Q: 1,
+    }).toDestination();
+
+    // Create a new synth with a custom envelope and connect it to the filter
+    synth = new Tone.Synth({
+        oscillator: {
+            type: "sawtooth", // You can change this to other waveforms like "sine", "square", etc.
+        },
+        envelope: {
+            attack: 2, // Fade in over 2 seconds
+            decay: 0.5,
+            sustain: 1, // Sustain level
+            release: 2, // Fade out over 2 seconds
+        },
+        portamento: 1, // Glide between notes over 1 second
+    }).connect(filter);
+
     const now = Tone.now();
 
-    // Play the starting pitch
-    synth.triggerAttack(yearaverage, now); // Sustain indefinitely
+    // Start the synth with the first note (yearaverage)
+    synth.triggerAttack(yearaverage, now);
 
-    // Use Tone.Part to schedule the notes
-    const part = new Tone.Part((time, note) => {
-        synth.set({ portamento: 1 }); // Slide effect
-        synth.triggerAttack(note, time);
-        console.log(note); // Log the note being played
-    }, ndata.map((note, index) => [index * 2, note])); // Schedule notes 2 seconds apart
-
-    part.start(now); // Start the part
-    Tone.Transport.start(); // Start the transport
+    // Schedule the notes to glide to each one
+    ndata.forEach((note, index) => {
+        const time = now + index * 2; // 2 seconds between each note
+        synth.setNote(note, time); // Glide to the next note
+    });
 
     // Stop the synth after the last note
-    const totalDuration = ndata.length * 2 + 7; // Total duration (ndata length * 2 seconds + sustain)
+    const totalDuration = ndata.length * 2 + 5; // Total duration (ndata length * 2 seconds + sustain)
     setTimeout(() => {
-        synth.triggerRelease();
-        part.stop(); // Stop the part
+        synth.triggerRelease(); // Fade out
         Tone.Transport.stop(); // Stop the transport
     }, totalDuration * 1000);
 }
